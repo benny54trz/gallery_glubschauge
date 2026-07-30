@@ -2,23 +2,32 @@ name: Sync Fork with Upstream
 
 on:
   schedule:
-    # Läuft jeden Tag um Mitternacht (UTC)
     - cron: '0 0 * * *'
-  # Erlaubt auch das manuelle Starten über den "Actions"-Tab
   workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Run GitHub Sync Fork Action
-        uses: tgymnich/fork-sync-action@v1.9
         with:
-          owner: open-noodle
-          repo: gallery
-          head: main      # Passe das an, falls der Standard-Branch des Originals anders heißt (z.B. master)
-          base: main      # Der Branch in deinem Fork, der aktualisiert werden soll
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Pull upstream changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/open-noodle/gallery.git
+          git fetch upstream
+          
+          # Sicherstellen, dass wir auf dem main-Branch sind
+          git checkout main || git checkout -b main upstream/main
+          
+          # Merge durchführen (Non-Fast-Forward oder direkt übernehmen)
+          git merge upstream/main --no-edit
+          
+          # Änderungen zurück zu GitHub pushen
+          git push origin main
