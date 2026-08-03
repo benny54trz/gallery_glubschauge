@@ -1654,6 +1654,37 @@ export class GlobalSearchManager {
     void goto(buildSearchablePageUrl(base, '', this.searchSortOrder, filters) ?? '/photos');
   }
 
+  /**
+   * Navigate the current searchable page (or `/photos`) to the timeline filtered by `tagId`.
+   * Tag rows used to open the deprecated `/search?query=` page, which ignores the filter panel
+   * and rendered nothing for a tag the palette had just suggested (#894). Routing through the
+   * searchable-page URL AND-s the tag into whatever the surface is already filtered by, so the
+   * user stays where they were with one more filter chip. The tag name is handed to the
+   * typed-search name cache so that chip reads "beach" instead of a raw uuid.
+   */
+  private navigateToTagResults(tagId: string, tagName: string): void {
+    const current = this.searchablePageFiltersProvider?.() ?? createFilterState();
+    const filters: FilterState = {
+      ...current,
+      tagIds: current.tagIds.includes(tagId) ? current.tagIds : [...current.tagIds, tagId],
+    };
+    // Same targeting rule as navigateToFieldResults: a tag is always a filtered timeline, so
+    // skip buildSearchDestination and its /map `q=` special-case, which would drop the filter.
+    // Ephemeral URL object for destination construction only; no reactive state is retained.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const base = getSearchablePageBasePath(page.url.pathname) ? page.url : new URL('/photos', page.url);
+    const destination = buildSearchablePageUrl(base, '', this.searchSortOrder, filters) ?? '/photos';
+    // An empty name must stay OUT of the map: active-filters-bar falls back to the raw id only
+    // for a missing entry, so caching '' would render a blank chip.
+    // Ephemeral maps, serialized into sessionStorage by storeTypedSearchNames on the next line;
+    // nothing reads them reactively, so plain Maps are correct here.
+    /* eslint-disable svelte/prefer-svelte-reactivity */
+    const tagNames = tagName ? new Map([[tagId, tagName]]) : new Map<string, string>();
+    storeTypedSearchNames(destination, { personNames: new Map(), tagNames });
+    /* eslint-enable svelte/prefer-svelte-reactivity */
+    void goto(destination);
+  }
+
   async applySearchSort(sortOrder: SearchablePageSortOrder, text = this.query) {
     this.searchSortOrder = sortOrder;
 
@@ -1805,7 +1836,7 @@ export class GlobalSearchManager {
           label: t.name ?? '',
           lastUsed: now,
         });
-        void goto(Route.search({ tagIds: [t.id] }));
+        this.navigateToTagResults(t.id, t.name ?? '');
         break;
       }
       case 'nav': {
@@ -1944,7 +1975,7 @@ export class GlobalSearchManager {
         break;
       }
       case 'tag': {
-        void goto(Route.search({ tagIds: [entry.tagId] }));
+        this.navigateToTagResults(entry.tagId, entry.label);
         break;
       }
       case 'navigate': {
@@ -2693,12 +2724,18 @@ export class GlobalSearchManager {
             const items = response.assets.items;
             return items.length === 0 ? { status: 'empty' } : { status: 'ok', items, total: items.length };
           }
-          // MetadataSearchDto does not have a withSharedSpaces field — shared-space
-          // scoping for metadata search would require passing spaceId, which we do not
-          // have in the palette. Only smart search includes shared-space content in v1.
+          // withSharedSpaces:true for the same reason as smart mode above — without it the
+          // field modes searched only the user's OWN assets, so a Space member whose photos
+          // live in someone else's Space saw an empty Photos section while smart search
+          // worked (#894). `withSharedSpaces` is inherited from BaseSearchSchema onto
+          // MetadataSearchDto and honoured by SearchService.searchMetadata; only
+          // SmartSearchDto re-declares it, which previously made it look smart-only.
+          // Safe to send unconditionally: the server rejects withSharedSpaces only when
+          // combined with spaceId, which the palette never sends here.
           const metadataSearchDto: MetadataSearchDto = {
             size: 5,
             visibility: AssetVisibility.Timeline,
+            withSharedSpaces: true,
             ...(mode === 'metadata' && { originalFileName: query }),
             ...(mode === 'description' && { description: query }),
             ...(mode === 'ocr' && { ocr: query }),
